@@ -8,12 +8,16 @@ const ACTION_CLASS = { RECOVER: "good", REVIEW: "warn", STOP: "danger" }
 
 function App() {
   const [stats, setStats] = useState(null)
+  const [queue, setQueue] = useState(null)
   const [error, setError] = useState(null)
-  const queue = getRecoveryQueue()
 
   useEffect(() => {
     getDashboardStats()
       .then(setStats)
+      .catch((err) => setError(err.message))
+
+    getRecoveryQueue()
+      .then(setQueue)
       .catch((err) => setError(err.message))
   }, [])
 
@@ -36,7 +40,7 @@ function App() {
           <span className="topbar-pill">Test Mode</span>
         </header>
         <div className="content">
-          {error && <div style={{ color: "var(--danger)", marginBottom: "1rem" }}>{error}</div>}
+          {error && <div className="error-banner">{error}</div>}
           <div className="card-row">
             <div className="card">
               <span className="card-label">REVENUE AT RISK</span>
@@ -61,25 +65,31 @@ function App() {
           <table className="queue-table">
             <thead>
               <tr>
-                <th>Customer</th>
+                <th>Payment</th>
                 <th className="col-amount">Amount</th>
                 <th>Reason</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {queue.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.customer}</td>
-                  <td className="col-amount">{formatRupees(row.amount)}</td>
-                  <td>{row.reason}</td>
-                  <td>
-                    <span className={`action-pill action-pill--${ACTION_CLASS[row.action]}`}>
-                      {ACTION_LABEL[row.action]}
-                    </span>
-                  </td>
+              {queue === null ? null : queue.length === 0 ? (
+                <tr>
+                  <td colSpan={4}>No payments at risk</td>
                 </tr>
-              ))}
+              ) : (
+                queue.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.customer}</td>
+                    <td className="col-amount">{formatRupees(row.amount)}</td>
+                    <td>{row.reason}</td>
+                    <td>
+                      <span className={`action-pill action-pill--${ACTION_CLASS[row.action]}`}>
+                        {ACTION_LABEL[row.action]}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

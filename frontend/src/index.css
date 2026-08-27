@@ -211,6 +211,11 @@ body,
   border: 1px solid var(--danger);
 }
 
+.error-banner {
+  color: var(--danger);
+  margin-bottom: 1rem;
+}
+
 @media (max-width: 899px) {
   .sidebar {
     display: none;

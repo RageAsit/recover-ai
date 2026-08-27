@@ -10,6 +10,7 @@ const { isWebhookSecretConfigured } = require("./services/webhookSignature");
 const paymentRoutes = require("./routes/paymentRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
+const recoveryRoutes = require("./routes/recoveryRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -37,6 +38,7 @@ app.use((err, req, res, next) => {
 
 app.use("/api/payments", paymentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/recovery", recoveryRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
