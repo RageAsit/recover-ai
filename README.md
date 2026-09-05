@@ -20,7 +20,6 @@
 - [Product walkthrough](#product-walkthrough)
 - [Two operating modes](#two-operating-modes)
 - [Architecture](#architecture)
-- [Local setup](#local-setup)
 - [Environment variables](#environment-variables)
 - [Deployment overview](#deployment-overview)
 - [Testing and verification](#testing-and-verification)
@@ -193,37 +192,6 @@ The critical state transition is **webhook → backend verification/reconciliati
 
 ---
 
-## Local setup
-
-### 1. Backend
-
-```bash
-cd backend
-npm install
-cp .env.example .env
-npm run dev
-```
-
-The backend uses `http://localhost:5000` by default when `PORT` is not overridden.
-
-### 2. Frontend
-
-In a second terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173`.
-
-For local development, the Vite dev server proxies `/api` requests to `http://localhost:5000`. The repository's frontend `.env.example` leaves `VITE_API_BASE_URL` blank for this setup.
-
-> **Do not place real credentials in the README or commit `.env` files.** Start from `backend/.env.example` and `frontend/.env.example` and fill secrets locally.
-
----
-
 ## Environment variables
 
 ### Backend
@@ -376,20 +344,17 @@ That dry run makes no Razorpay API request. The script also supports a live `--a
 
 ## Security and demo limitations
 
-- Never commit `.env` files, API keys, webhook secrets, or other credentials.
-- Use an isolated MongoDB database for the buildathon demo.
-- Keep Razorpay in **Test Mode**.
-- Restrict MongoDB network access as tightly as practical for your environment.
-- The demo reset path only targets synthetic/demo records and rejects non-demo payments.
-- Customer contact details are kept out of the LLM context and excluded from the main read APIs.
-- This project is a **buildathon demonstration**, not a production-ready payment operations platform.
+- Never commit `.env` files or API keys.
+- Use an isolated demo database for buildathon runs.
+- Keep Razorpay in Test Mode.
+- Restrict MongoDB network access when possible.
+- Demo reset only targets registered synthetic/demo payment records.
+- This is a **buildathon demonstration**, not a production-ready payment operations platform.
 
 ---
 
 ## Buildathon takeaway
 
-RecoverAI is built around a simple control model:
+**AI recommends. Policy controls. Razorpay processes. Webhooks verify.**
 
-> **AI recommends. Policy controls. Razorpay processes. Webhooks verify.**
-
-The point is not to replace payment operations with an AI guess. It is to use AI where reasoning helps, while keeping the actual recovery decision and payment-state transitions behind deterministic backend controls.
+RecoverAI's core idea is simple: use AI where judgment helps, keep money-moving decisions behind deterministic controls, and treat verified provider events as the source of truth for recovery.
