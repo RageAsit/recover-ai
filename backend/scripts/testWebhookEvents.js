@@ -12,6 +12,7 @@
  *   LOG_FILE  path to the server log; enables the "invalid signature never
  *             reaches event processing" assertion.
  */
+require("dotenv").config();
 const crypto = require("crypto");
 const fs = require("fs");
 
@@ -53,8 +54,8 @@ async function post(body, { signature = undefined, signed = true } = {}) {
 
 /* ---------- sample payloads (shape only, not real Razorpay data) ---------- */
 
-// email/contact are included deliberately to prove they are NOT extracted
-// into the normalized object and NOT logged.
+// email/contact are included to verify they are extracted as customerEmail/customerContact
+// and NOT logged in logEvent.
 const paymentFailed = JSON.stringify({
   entity: "event",
   account_id: "acc_LOCALTEST",
@@ -99,6 +100,24 @@ const paymentCaptured = JSON.stringify({
   },
 });
 
+const paymentLinkPaid = JSON.stringify({
+  entity: "event",
+  event: "payment_link.paid",
+  contains: ["payment_link"],
+  payload: {
+    payment_link: {
+      entity: {
+        id: "plink_TESTLINK001",
+        reference_id: "6a97a2bbaa507aca9a2fbc75",
+        status: "paid",
+        amount: 249900,
+        amount_paid: 249900,
+        order_id: "order_TESTLINK001",
+      },
+    },
+  },
+});
+
 const unsupportedEvent = JSON.stringify({
   entity: "event",
   event: "order.paid",
@@ -132,12 +151,40 @@ const noEventName = JSON.stringify({ entity: "event", payload: { payment: { enti
     check("currency", n.currency, "INR");
     check("status", n.status, "failed");
     check("method", n.method, "card");
-    check("failureReason", n.failureReason, "Payment failed due to insufficient funds");
-    check("no customer email leaked", "email" in n, false);
-    check("no customer contact leaked", "contact" in n, false);
+    check("customerEmail", n.customerEmail, "customer@example.com");
+    check("customerContact", n.customerContact, "+919999999999");
     check("exact field set", Object.keys(n).sort(), [
-      "amount", "currency", "event", "failureReason", "method", "orderId", "paymentId", "status",
+      "amount", "currency", "customerContact", "customerEmail", "event", "failureReason", "method", "orderId", "paymentId", "paymentLinkId", "paymentLinkReferenceId", "paymentLinkStatus", "status",
     ]);
+
+    // Sentinel email handling
+    const sentinelLower = normalizePaymentEvent({
+      event: "payment.failed",
+      payload: { payment: { entity: { email: "void@razorpay.com" } } },
+    });
+    check("sentinel email void@razorpay.com -> null", sentinelLower.customerEmail, null);
+
+    const sentinelMixedCase = normalizePaymentEvent({
+      event: "payment.failed",
+      payload: { payment: { entity: { email: "VOID@Razorpay.com " } } },
+    });
+    check("sentinel email VOID@Razorpay.com  -> null", sentinelMixedCase.customerEmail, null);
+
+    const normalEmail = normalizePaymentEvent({
+      event: "payment.failed",
+      payload: { payment: { entity: { email: "payer@example.com" } } },
+    });
+    check("normal email -> unchanged", normalEmail.customerEmail, "payer@example.com");
+
+    // Normalization of payment_link.paid
+    const parsedLink = parseWebhookBody(Buffer.from(paymentLinkPaid));
+    const nLink = normalizePaymentEvent(parsedLink.body);
+    check("link event", nLink.event, "payment_link.paid");
+    check("link paymentLinkId", nLink.paymentLinkId, "plink_TESTLINK001");
+    check("link referenceId", nLink.paymentLinkReferenceId, "6a97a2bbaa507aca9a2fbc75");
+    check("link status", nLink.paymentLinkStatus, "paid");
+    check("link amount", nLink.amount, 249900);
+    check("link orderId", nLink.orderId, "order_TESTLINK001");
   }
 
   console.log("\nB. Defensive access (malformed shapes must not throw)");
@@ -164,7 +211,9 @@ const noEventName = JSON.stringify({ entity: "event", payload: { payment: { enti
         typeof result === "object" &&
         result !== null &&
         [result.paymentId, result.orderId, result.amount, result.currency,
-         result.status, result.method, result.failureReason].every((v) => v === null);
+         result.status, result.method, result.failureReason,
+         result.customerEmail, result.customerContact,
+         result.paymentLinkId, result.paymentLinkReferenceId, result.paymentLinkStatus].every((v) => v === null);
       check(`${label} -> no throw, fields null`, allNullish, true);
     }
     // error fallback chain
@@ -183,6 +232,7 @@ const noEventName = JSON.stringify({ entity: "event", payload: { payment: { enti
   console.log("\nC. Classification");
   check("payment.failed supported", isSupportedEvent("payment.failed"), true);
   check("payment.captured supported", isSupportedEvent("payment.captured"), true);
+  check("payment_link.paid supported", isSupportedEvent("payment_link.paid"), true);
   check("order.paid unsupported", isSupportedEvent("order.paid"), false);
   check("undefined unsupported", isSupportedEvent(undefined), false);
 
@@ -196,6 +246,10 @@ const noEventName = JSON.stringify({ entity: "event", payload: { payment: { enti
     const r2 = await post(paymentCaptured);
     check("2. signed payment.captured -> 200", r2.status, 200);
     check("   event echoed", r2.body?.event, "payment.captured");
+
+    const r2b = await post(paymentLinkPaid);
+    check("2b. signed payment_link.paid -> 200", r2b.status, 200);
+    check("   event echoed", r2b.body?.event, "payment_link.paid");
 
     const r3 = await post(unsupportedEvent);
     check("3. signed unsupported -> 200 (no retry)", r3.status, 200);

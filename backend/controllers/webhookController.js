@@ -6,7 +6,10 @@ const {
   isSupportedEvent,
   logEvent,
 } = require("../services/webhookEvents");
-const { savePaymentFromEvent } = require("../services/paymentStore");
+const {
+  savePaymentFromEvent,
+  processPaymentLinkPaid,
+} = require("../services/paymentStore");
 
 /**
  * POST /api/webhooks/razorpay
@@ -102,10 +105,14 @@ async function receiveRazorpayWebhook(req, res) {
   }
 
   try {
-    await savePaymentFromEvent(normalized);
-    console.log(`[webhook] Persisted ${normalized.event}: paymentId=${normalized.paymentId}`);
+    if (normalized.event === "payment_link.paid") {
+      await processPaymentLinkPaid(normalized);
+    } else {
+      await savePaymentFromEvent(normalized);
+      console.log(`[webhook] Persisted ${normalized.event}: paymentId=${normalized.paymentId}`);
+    }
   } catch (err) {
-    console.error(`[webhook] Failed to persist ${normalized.event}: ${err.message}`);
+    console.error(`[webhook] Failed to process ${normalized.event}: ${err.message}`);
     return res.status(500).json({
       success: false,
       message: "Failed to persist event",

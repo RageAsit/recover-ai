@@ -20,6 +20,16 @@ const paymentSchema = new mongoose.Schema(
     },
     method: String,
     failureReason: String,
+    customerEmail: {
+      type: String,
+      index: true,
+    },
+    customerContact: String,
+    isDemo: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   { timestamps: true }
 );

@@ -9,11 +9,28 @@
  * Deliberately NOT done here: persistence, idempotency, recovery, notifications.
  */
 
-const SUPPORTED_EVENTS = Object.freeze(["payment.failed", "payment.captured"]);
+const SUPPORTED_EVENTS = Object.freeze([
+  "payment.failed",
+  "payment.captured",
+  "payment_link.paid",
+]);
+const SENTINEL_EMAILS = Object.freeze(["void@razorpay.com"]);
 
 /** Narrowing helpers - each returns null instead of throwing on bad input. */
 function asString(value) {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * Normalizes email: returns null if missing, empty, or matching known placeholder sentinels.
+ */
+function sanitizeCustomerEmail(rawEmail) {
+  const email = asString(rawEmail);
+  if (!email) return null;
+  if (SENTINEL_EMAILS.includes(email.trim().toLowerCase())) {
+    return null;
+  }
+  return email;
 }
 
 function asInteger(value) {
@@ -78,35 +95,88 @@ function getPaymentEntity(body) {
 }
 
 /**
+ * Razorpay nests the payment link under payload.payment_link.entity.
+ * Returns null if any level is missing or not an object.
+ */
+function getPaymentLinkEntity(body) {
+  const payload = asObject(body.payload);
+  if (!payload) return null;
+
+  const paymentLink = asObject(payload.payment_link);
+  if (!paymentLink) return null;
+
+  return asObject(paymentLink.entity);
+}
+
+/**
+ * Razorpay nests the order under payload.order.entity.
+ * Returns null if any level is missing or not an object.
+ */
+function getOrderEntity(body) {
+  const payload = asObject(body.payload);
+  if (!payload) return null;
+
+  const order = asObject(payload.order);
+  if (!order) return null;
+
+  return asObject(order.entity);
+}
+
+/**
  * Build the small internal representation used by the rest of the app, so the
  * full Razorpay payload never has to be passed around.
  *
  * Every field is null when unavailable - never undefined, never throwing.
- * Deliberately excludes customer data (email, contact, card details).
+ * Email and contact are captured because the CREATE_PAYMENT_LINK recovery action
+ * requires them to notify the payer. Card details remain excluded.
+ * Placeholder/sentinel emails (e.g. "void@razorpay.com") normalize to null.
  *
  * @returns {{event: string|null, paymentId: string|null, orderId: string|null,
  *            amount: number|null, currency: string|null, status: string|null,
- *            method: string|null, failureReason: string|null}}
+ *            method: string|null, failureReason: string|null,
+ *            customerEmail: string|null, customerContact: string|null,
+ *            paymentLinkId: string|null, paymentLinkReferenceId: string|null,
+ *            paymentLinkStatus: string|null}}
  */
 function normalizePaymentEvent(body) {
   const safeBody = asObject(body) || {};
-  const entity = getPaymentEntity(safeBody) || {};
+  const paymentEntity = getPaymentEntity(safeBody) || {};
+  const linkEntity = getPaymentLinkEntity(safeBody) || {};
+  const orderEntity = getOrderEntity(safeBody) || {};
 
   // Razorpay reports failures across three fields; prefer the most descriptive.
   const failureReason =
-    asString(entity.error_description) ??
-    asString(entity.error_reason) ??
-    asString(entity.error_code);
+    asString(paymentEntity.error_description) ??
+    asString(paymentEntity.error_reason) ??
+    asString(paymentEntity.error_code);
+
+  const amount =
+    asInteger(paymentEntity.amount) ??
+    asInteger(linkEntity.amount_paid) ??
+    asInteger(linkEntity.amount) ??
+    asInteger(orderEntity.amount);
+
+  const orderId =
+    asString(paymentEntity.order_id) ??
+    asString(linkEntity.order_id) ??
+    asString(orderEntity.id);
 
   return {
     event: asString(safeBody.event),
-    paymentId: asString(entity.id),
-    orderId: asString(entity.order_id),
-    amount: asInteger(entity.amount),
-    currency: asString(entity.currency),
-    status: asString(entity.status),
-    method: asString(entity.method),
+    paymentId: asString(paymentEntity.id),
+    orderId,
+    amount,
+    currency: asString(paymentEntity.currency) ?? asString(linkEntity.currency),
+    status: asString(paymentEntity.status) ?? asString(linkEntity.status),
+    method: asString(paymentEntity.method),
     failureReason,
+    customerEmail: sanitizeCustomerEmail(paymentEntity.email),
+    // Leave customerContact as-is: no placeholder/sentinel phone values
+    // have been observed in practice; do not invent one.
+    customerContact: asString(paymentEntity.contact),
+    paymentLinkId: asString(linkEntity.id),
+    paymentLinkReferenceId: asString(linkEntity.reference_id),
+    paymentLinkStatus: asString(linkEntity.status),
   };
 }
 
@@ -115,13 +185,13 @@ function isSupportedEvent(eventName) {
 }
 
 /**
- * Log a concise development message for the event. No action is taken:
- * recovery logic belongs to a later step.
+ * Log a concise development message for the event.
  *
- * Logs identifiers and amounts only - never the full payload or customer data.
+ * Logs identifiers, statuses, and amounts only - never customer contact/email
+ * or short URLs.
  */
 function logEvent(normalized) {
-  const { event, paymentId, orderId, amount } = normalized;
+  const { event, paymentId, orderId, amount, paymentLinkId, paymentLinkReferenceId, paymentLinkStatus } = normalized;
 
   if (event === "payment.failed") {
     console.log(
@@ -134,6 +204,14 @@ function logEvent(normalized) {
   if (event === "payment.captured") {
     console.log(
       `[webhook] Payment captured: paymentId=${paymentId} orderId=${orderId} amount=${amount}`
+    );
+    return;
+  }
+
+  if (event === "payment_link.paid") {
+    console.log(
+      `[webhook] Payment link paid: linkId=${paymentLinkId} referenceId=${paymentLinkReferenceId} ` +
+        `status=${paymentLinkStatus} amount=${amount}${paymentId ? ` paymentId=${paymentId}` : ""}${orderId ? ` orderId=${orderId}` : ""}`
     );
     return;
   }

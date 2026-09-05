@@ -159,10 +159,119 @@ async function createOrder({ amount, currency = "INR", receipt } = {}) {
   }
 }
 
+/**
+ * Creates a Razorpay Payment Link.
+ *
+ * CRITICAL SAFETY RULES:
+ * - `amount` is in paise and passed through with NO conversion.
+ * - `referenceId` is REQUIRED for idempotency on Razorpay's side.
+ * - `notify.sms` and `notify.email` are hardcoded to `false` (creates link object without contacting customer).
+ * - Returns ONLY the 5 allowlisted fields: id, shortUrl, status, referenceId, amount.
+ * - Errors are converted via toSafeError() so credentials and auth headers never leak.
+ *
+ * @param {Object} params
+ * @param {number} params.amount - Amount in paise (positive integer).
+ * @param {string} [params.currency="INR"] - ISO currency code.
+ * @param {string} params.referenceId - Unique reference identifier for idempotency.
+ * @param {string} [params.description] - Brief description.
+ * @param {string} [params.customerContact] - Customer phone number (optional).
+ * @param {string} [params.customerEmail] - Customer email address (optional).
+ * @returns {Promise<{
+ *   id: string,
+ *   shortUrl: string,
+ *   status: string,
+ *   referenceId: string,
+ *   amount: number
+ * }>}
+ */
+async function createPaymentLink({
+  amount,
+  currency = "INR",
+  referenceId,
+  description,
+  customerContact,
+  customerEmail,
+} = {}) {
+  if (!Number.isInteger(amount) || amount <= 0) {
+    const err = new Error(
+      "amount must be a positive integer in paise (e.g. 249900 for Rs 2,499.00)"
+    );
+    err.isSanitized = true;
+    err.reason = "invalid_amount";
+    err.httpStatus = 400;
+    throw err;
+  }
+
+  if (typeof referenceId !== "string" || referenceId.trim() === "") {
+    const err = new Error("referenceId is required and cannot be empty");
+    err.isSanitized = true;
+    err.reason = "missing_reference_id";
+    err.httpStatus = 400;
+    throw err;
+  }
+
+  // When both DEMO_MODE=true and RAZORPAY_MOCK=true:
+  // Return deterministic unique synthetic link ID and allowlisted fields without network calls.
+  if (process.env.DEMO_MODE === "true" && process.env.RAZORPAY_MOCK === "true") {
+    const cleanRef = referenceId.trim();
+    const mockId = `plink_DEMO_${cleanRef}`;
+    console.log(
+      `[razorpayService] MOCK payment link generated for demo: linkId=${mockId}, referenceId=${cleanRef}, amount=${amount}`
+    );
+    return {
+      id: mockId,
+      shortUrl: `https://rzp.io/i/demo_${cleanRef}`,
+      status: "created",
+      referenceId: cleanRef,
+      amount,
+    };
+  }
+
+  const razorpay = getRazorpayClient();
+
+  const payload = {
+    amount,
+    currency,
+    reference_id: referenceId.trim(),
+    notify: {
+      sms: false,
+      email: false,
+    },
+  };
+
+  if (description && typeof description === "string") {
+    payload.description = description.trim();
+  }
+
+  const customer = {};
+  if (customerContact) customer.contact = customerContact;
+  if (customerEmail) customer.email = customerEmail;
+  if (Object.keys(customer).length > 0) {
+    payload.customer = customer;
+  }
+
+  let raw;
+  try {
+    raw = await razorpay.paymentLink.create(payload);
+  } catch (err) {
+    throw toSafeError(err);
+  }
+
+  return {
+    id: raw.id,
+    shortUrl: raw.short_url,
+    status: raw.status,
+    referenceId: raw.reference_id,
+    amount: raw.amount,
+  };
+}
+
 module.exports = {
   getRazorpayClient,
   verifyConnection,
   createOrder,
+  createPaymentLink,
   getMissingCredentials,
   describeError,
 };
+

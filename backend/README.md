@@ -21,10 +21,30 @@ Keys**, with the dashboard toggled to **Test Mode**. The key id must start with
 
 ## Endpoints
 
-| Method | Path                  | Description                                       |
-| ------ | --------------------- | ------------------------------------------------- |
-| GET    | `/api/health`         | Server liveness. No external calls.               |
-| GET    | `/api/test/razorpay`  | Read-only Razorpay Test Mode connectivity check. Development only. |
+| Method | Path                                           | Description                                       |
+| ------ | ---------------------------------------------- | ------------------------------------------------- |
+| GET    | `/api/health`                                  | Server liveness. No external calls.               |
+| GET    | `/api/test/razorpay`                           | Read-only Razorpay Test Mode connectivity check.  |
+| GET    | `/api/dashboard`                               | Recovery metrics and funnel stats.                |
+| GET    | `/api/recovery`                                | Active failed payments recovery queue.            |
+| GET    | `/api/recovery/payments/:id`                   | Payment details and recovery attempt history.     |
+| POST   | `/api/recovery/:id/run`                        | AI agent analysis and policy evaluation.          |
+| POST   | `/api/recovery/attempts/:id/execute`           | Recovery attempt approval and dispatch.           |
+| GET    | `/api/payments`                                | Paginated payments with status filters.           |
+| GET    | `/api/recovery/activity`                       | Global recovery attempt audit logs.               |
+| POST   | `/api/webhooks/razorpay`                       | Verified Razorpay webhook ingestion.              |
+| GET    | `/api/demo/status`                             | Demo Mode configuration and mock status.          |
+| POST   | `/api/demo/recovery-attempts/:id/payment`      | Simulated customer payment & reconciliation.      |
+| POST   | `/api/demo/payments/:id/reset`                 | Revert demo payment to failed for repeated runs.  |
+
+## Demo Mode Configuration
+
+Set in `.env`:
+```env
+DEMO_MODE=true        # Enables /api/demo/* endpoints for buildathon demonstration
+RAZORPAY_MOCK=true    # Generates deterministic synthetic payment links without outbound network calls
+LLM_MOCK=true         # Deterministic mock recommendations without OpenAI API dependency
+```
 
 ## Structure
 

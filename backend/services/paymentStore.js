@@ -1,4 +1,6 @@
+const mongoose = require("mongoose");
 const Payment = require("../models/Payment");
+const RecoveryAttempt = require("../models/RecoveryAttempt");
 
 /**
  * Upsert a payment document from a normalized webhook event.
@@ -27,6 +29,8 @@ async function savePaymentFromEvent(normalized) {
     status: normalized.status,
     method: normalized.method ?? undefined,
     failureReason: normalized.failureReason ?? undefined,
+    customerEmail: normalized.customerEmail ?? undefined,
+    customerContact: normalized.customerContact ?? undefined,
   };
   const opts = { upsert: true, new: true, runValidators: true };
 
@@ -64,5 +68,129 @@ async function savePaymentFromEvent(normalized) {
   return savedDoc;
 }
 
-module.exports = { savePaymentFromEvent };
+/**
+ * Process a verified payment_link.paid webhook event.
+ *
+ * Links back to the RecoveryAttempt via payment_link.reference_id, verifies that
+ * the payment link id matches attempt.externalReference, ensures the original
+ * Payment is currently "failed" and transitions it to "recovered", and only then
+ * updates RecoveryAttempt to "succeeded".
+ *
+ * @param {Object} normalized - Output of normalizePaymentEvent().
+ * @returns {Promise<{ handled: boolean, reason?: string, alreadyProcessed?: boolean }>}
+ */
+async function processPaymentLinkPaid(normalized) {
+  const referenceId = normalized.paymentLinkReferenceId;
+  const paymentLinkId = normalized.paymentLinkId;
+
+  // 4. If the reference id is missing, invalid, or does not match an existing attempt,
+  // acknowledge the webhook safely without crashing.
+  if (!referenceId) {
+    console.warn(
+      "[webhook] payment_link.paid: missing reference_id; acknowledging without update"
+    );
+    return { handled: false, reason: "missing_reference_id" };
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(referenceId)) {
+    console.warn(
+      `[webhook] payment_link.paid: invalid reference_id "${referenceId}"; acknowledging without update`
+    );
+    return { handled: false, reason: "invalid_reference_id" };
+  }
+
+  const attempt = await RecoveryAttempt.findById(referenceId);
+  if (!attempt) {
+    console.warn(
+      `[webhook] payment_link.paid: attempt not found for referenceId=${referenceId}; acknowledging without update`
+    );
+    return { handled: false, reason: "attempt_not_found" };
+  }
+
+  // 6. If attempt.externalReference exists and does not match the webhook payment link id,
+  // do not update money/recovery state; log a safe warning and acknowledge.
+  if (attempt.externalReference && attempt.externalReference !== paymentLinkId) {
+    console.warn(
+      `[webhook] payment_link.paid mismatch: linkId=${paymentLinkId} does not match externalReference=${attempt.externalReference} for attempt=${attempt._id}; ignoring`
+    );
+    return { handled: false, reason: "link_id_mismatch" };
+  }
+
+  if (!attempt.externalReference) {
+    console.warn(
+      `[webhook] payment_link.paid: attempt ${attempt._id} has no externalReference set; ignoring`
+    );
+    return { handled: false, reason: "missing_external_reference" };
+  }
+
+  // Preserve duplicate-webhook idempotency: an already succeeded/recovered pair
+  // must remain a successful safe acknowledgement.
+  if (attempt.status === "succeeded") {
+    const existingPayment = await Payment.findOne({
+      razorpayPaymentId: attempt.razorpayPaymentId,
+    }).lean();
+
+    if (existingPayment && existingPayment.status === "recovered") {
+      console.log(
+        `[webhook] payment_link.paid duplicate delivery: attempt=${attempt._id} already succeeded, payment=${attempt.razorpayPaymentId} already recovered`
+      );
+      return { handled: true, alreadyProcessed: true };
+    }
+  }
+
+  // Transition original Payment from "failed" to "recovered".
+  // Only a payment currently in "failed" state can be recovered.
+  const paymentResult = await Payment.updateOne(
+    { razorpayPaymentId: attempt.razorpayPaymentId, status: "failed" },
+    { $set: { status: "recovered" } }
+  );
+
+  // If the payment was not updated, investigate why to return a safe reason and log
+  if (paymentResult.modifiedCount !== 1) {
+    const payment = await Payment.findOne({
+      razorpayPaymentId: attempt.razorpayPaymentId,
+    }).lean();
+
+    if (!payment) {
+      console.warn(
+        `[webhook] payment_link.paid aborted: original payment not found for paymentId=${attempt.razorpayPaymentId}, attempt=${attempt._id}`
+      );
+      return { handled: false, reason: "payment_not_found" };
+    }
+
+    // When the linked Payment is already "recovered" and the attempt is still "executed",
+    // treat a verified matching payment_link.paid webhook as a safe recovery-finalization retry:
+    if (payment.status === "recovered" && attempt.status === "executed") {
+      await RecoveryAttempt.updateOne(
+        { _id: attempt._id },
+        { $set: { status: "succeeded" } }
+      );
+
+      console.log(
+        `[webhook] payment_link.paid retry reconciled: payment=${attempt.razorpayPaymentId} already recovered, attempt=${attempt._id} marked succeeded`
+      );
+      return { handled: true, reconciled: true, alreadyProcessed: true };
+    }
+
+    console.warn(
+      `[webhook] payment_link.paid aborted: original payment ${payment.razorpayPaymentId} is not in 'failed' status (current status: ${payment.status}), attempt=${attempt._id}`
+    );
+    return { handled: false, reason: "payment_not_failed" };
+  }
+
+  // Payment was successfully transitioned from "failed" to "recovered" -
+  // now mark RecoveryAttempt as "succeeded".
+  await RecoveryAttempt.updateOne(
+    { _id: attempt._id },
+    { $set: { status: "succeeded" } }
+  );
+
+  console.log(
+    `[webhook] payment_link.paid processed: payment=${attempt.razorpayPaymentId} marked recovered, attempt=${attempt._id} marked succeeded`
+  );
+
+  return { handled: true };
+}
+
+module.exports = { savePaymentFromEvent, processPaymentLinkPaid };
 

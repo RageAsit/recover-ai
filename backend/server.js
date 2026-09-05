@@ -11,11 +11,38 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const recoveryRoutes = require("./routes/recoveryRoutes");
+const demoRoutes = require("./routes/demoRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+const allowedLocalOriginRegex = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+const configuredFrontendOrigins = process.env.FRONTEND_ORIGIN
+  ? process.env.FRONTEND_ORIGIN.split(",").map((o) => o.trim())
+  : [];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, server-to-server, test scripts)
+    if (!origin) {
+      return callback(null, true);
+    }
+    // Allow configured production frontend origins
+    if (configuredFrontendOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    // Allow local development origins
+    if (allowedLocalOriginRegex.test(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 
 // ORDER IS LOAD-BEARING: webhooks mount BEFORE express.json().
 // express.json() would consume the request stream and hand the route a parsed
@@ -39,6 +66,7 @@ app.use((err, req, res, next) => {
 app.use("/api/payments", paymentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/recovery", recoveryRoutes);
+app.use("/api/demo", demoRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({
